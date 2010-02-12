@@ -36,14 +36,18 @@ def fork(f):
 acceptor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 acceptor.bind(('0.0.0.0', 8888))
 acceptor.listen(1024)
+name = "Parent"
 
 @atexit.register
 def on_exit():
     acceptor.close()
+    print "{0} {1} exiting!".format(name, os.getpid())
 
 for i in range(3):
     @fork
     def child():
+        global name
+        name = "Child"
         @trap(signal.SIGINT)
         def exit_when_interrupted():
             sys.exit()
