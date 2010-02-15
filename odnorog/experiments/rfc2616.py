@@ -2,7 +2,10 @@ import collections
 import re
 from urlparse import urlsplit
 
-__all__ = ['RequestLine', 'tokenize_request_line', 'parse_request_line']
+__all__ = [
+    'RequestLine', 'tokenize_request_line',
+    'parse_request_line', 'parse_headers',
+]
 
 RequestLine = collections.namedtuple(
     'RequestLine',
@@ -55,6 +58,29 @@ def parse_request_line(stdin):
             raise ParsingError("Non-absolute URI must be an absulte path", 'sec5.1.2')
     return RequestLine._make((method, uri, line['version'], parsed_uri))
 
+_lws = re.compile(r'^[ \t]+')
+
+def parse_headers(stdin):
+    name = None
+    value = []
+    while True:
+        line = stdin.readline()
+        if line == '\r\n':
+            if name:
+                yield (name, ''.join(value))
+            break
+        elif _lws.search(line):
+            value.append(line.strip())
+        else:
+            if name:
+                yield (name, ''.join(value))
+            try:
+                left, right = line.split(':', 1)
+            except ValueError:
+                raise
+            name = left.rstrip()
+            value = [right.strip()]
+
 if __name__ == '__main__':
     import unittest
     import cStringIO as sio
@@ -100,5 +126,17 @@ if __name__ == '__main__':
         def test_no_abs_path(self):
             stdin = sio.StringIO('GET woopie/boo/baz HTTP/1.1\r\n')
             self.assertRaises(ParsingError, parse_request_line, stdin)
+
+        def test_parse_headers(self):
+            stdin = sio.StringIO('\r\n'.join([
+                'foo: bar',
+                'baz:\tqwerty,',
+                ' foop,\t',
+                '\tzoop',
+                'zorg:',
+                '\r\n'
+            ]))
+            self.assertEquals([('foo', 'bar'), ('baz', 'qwerty,foop,zoop'), ('zorg', '')],
+                              list(parse_headers(stdin)))
 
     unittest.main()

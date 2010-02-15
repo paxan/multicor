@@ -10,7 +10,7 @@ import wsgiref.handlers
 from urllib import unquote
 
 from process import fork, trap, wait_all
-from rfc2616 import parse_request_line
+from rfc2616 import parse_request_line, parse_headers
 
 class WsgiHandler(wsgiref.handlers.BaseHandler):
     os_environ = {}
@@ -44,7 +44,7 @@ class WsgiHandler(wsgiref.handlers.BaseHandler):
 acceptor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 acceptor.bind(('0.0.0.0', 8888))
 acceptor.listen(1024)
-name = "Parent"
+process_name = "Parent"
 
 host, server_port = acceptor.getsockname()[:2]
 server_name = socket.getfqdn(host)
@@ -52,21 +52,21 @@ server_name = socket.getfqdn(host)
 @atexit.register
 def on_exit():
     acceptor.close()
-    print "{0} {1} has left the building.".format(name, os.getpid())
+    print "{0} {1} has left the building.".format(process_name, os.getpid())
 
 import webob.dec
 from wsgiref.validate import validator
 @webob.dec.wsgify
 def app(req):
-    global name
-    print "{2}: Proudly served by {0} {1}".format(name, os.getpid(), req.path)
+    global process_name
+    print "{2}: Proudly served by {0} {1}".format(process_name, os.getpid(), req.path)
     return "Hello!"
 
 for i in range(3):
     @fork
     def child():
-        global name
-        name = "Child"
+        global process_name
+        process_name = "Child"
 
         @trap(signal.SIGINT)
         def exit_when_interrupted():
@@ -87,6 +87,14 @@ for i in range(3):
                             'SERVER_PORT': str(server_port),
                             'SCRIPT_NAME': '',
                         }
+                        # Add headers:
+                        for name, value in parse_headers(sock_input):
+                            name = 'HTTP_' + name.replace('-', '_').upper()
+                            # TODO: HTTP_CONTENT_TYPE and HTTP_CONTENT_LENGTH are special
+                            if name in environ:
+                                environ[name] += ',' + value
+                            else:
+                                environ[name] = value
                         handler = WsgiHandler(sock_input, sock_output, sys.stderr, environ)
                         handler.run(validator(app))
 
