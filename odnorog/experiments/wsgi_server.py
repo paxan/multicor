@@ -64,80 +64,86 @@ class WsgiHandler(wsgiref.handlers.BaseHandler):
                 environ[name] = value
         return cls(stdin, stdout, stderr, environ)
 
-def demo_app(environ, start_response):
-    chunks = ["Hello, I'm {0} {1}".format(process_name, os.getpid())]
-    for k, v in sorted(environ.items()):
-        chunks.append(' = '.join((k, repr(v))))
-    start_response('200 OK', [('Content-Type', 'text/plain')])
-    yield '\n'.join(chunks)
-
 def get_server_address(sock):
     host, server_port = sock.getsockname()[:2]
     server_name = socket.getfqdn(host)
     return server_name, server_port
 
-acceptor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-acceptor.bind(('0.0.0.0', 8888))
-acceptor.listen(1024)
-process_name = "Parent"
-master_pid = os.getpid()
+def host(app, bind_to):
+    acceptor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    acceptor.bind(bind_to)
+    acceptor.listen(1024)
 
-@atexit.register
-def on_exit():
-    acceptor.close()
-    print "{0} {1} has left the building.".format(process_name, os.getpid())
+    process_info = dict(
+        name='Parent',
+        master_pid=os.getpid()
+    )
 
-for i in range(3):
-    @fork
-    def child():
-        from wsgiref.validate import validator
+    @atexit.register
+    def on_exit():
+        acceptor.close()
+        print "{0} {1} has left the building.".format(process_info['name'], os.getpid())
 
-        parent_pid = master_pid
+    for i in range(3):
+        @fork
+        def child():
+            process_info['name'] = 'Child'
+            parent_pid = process_info['master_pid']
 
-        global process_name
-        process_name = "Child"
+            @trap(signal.SIGINT)
+            def exit_when_interrupted():
+                sys.exit()
 
-        @trap(signal.SIGINT)
-        def exit_when_interrupted():
-            sys.exit()
+            server_name, server_port = get_server_address(acceptor)
+            acceptor.settimeout(0.0)
+            rlist = [acceptor]
 
-        server_name, server_port = get_server_address(acceptor)
-        acceptor.settimeout(0.0)
-        rlist = [acceptor]
+            while True:
+                for ready_sock in rlist:
+                    try:
+                        sock, _ = ready_sock.accept()
+                    except IOError as ex:
+                        if ex.errno not in (errno.EAGAIN, errno.ECONNABORTED): raise
+                    else:
+                        # TODO: handle errors!
+                        sock.settimeout(None)
+                        with closing(sock):
+                            with closing(sock.makefile('wb', 16384)) as sock_output:
+                                with closing(sock.makefile('rb', 16384)) as sock_input:
+                                    handler = WsgiHandler.parse_request(sock_input, sock_output, sys.stderr, server_name, server_port)
+                                    handler.base_env['odnorog.process_name'] = process_info['name']
+                                    handler.run(app)
 
-        while True:
-            for ready_sock in rlist:
+                # Quit if we see that our parent is gone.
+                if os.getppid() != parent_pid: return
+
                 try:
-                    sock, _ = ready_sock.accept()
+                    rlist, wlist, xlist = select([acceptor], [], [], 5.0)
                 except IOError as ex:
-                    if ex.errno not in (errno.EAGAIN, errno.ECONNABORTED): raise
-                else:
-                    # TODO: handle errors!
-                    sock.settimeout(None)
-                    with closing(sock):
-                        with closing(sock.makefile('wb', 16384)) as sock_output:
-                            with closing(sock.makefile('rb', 16384)) as sock_input:
-                                handler = WsgiHandler.parse_request(sock_input, sock_output, sys.stderr, server_name, server_port)
-                                handler.run(validator(demo_app))
+                    if ex.errno == errno.EINTR:
+                        rlist = [acceptor]
+                    elif ex.errno == errno.EBADF:
+                        return
+                    else:
+                        raise
 
-            # Quit if we see that our parent is gone.
-            if os.getppid() != parent_pid: return
+        print "Forked child: {0}".format(child.pid)
 
-            try:
-                rlist, wlist, xlist = select([acceptor], [], [], 5.0)
-            except IOError as ex:
-                if ex.errno == errno.EINTR:
-                    rlist = [acceptor]
-                elif ex.errno == errno.EBADF:
-                    return
-                else:
-                    raise
+    @trap(signal.SIGINT)
+    def exit_parent():
+        print "\nbailing"
+        sys.exit()
 
-    print "Forked child: {0}".format(child.pid)
+    wait_all()
 
-@trap(signal.SIGINT)
-def exit_parent():
-    print "\nbailing"
-    sys.exit()
+if __name__ == '__main__':
+    from wsgiref.validate import validator
 
-wait_all()
+    def demo_app(environ, start_response):
+        chunks = ["Hello, I'm {0} {1}".format(environ['odnorog.process_name'], os.getpid())]
+        for k, v in sorted(environ.items()):
+            chunks.append(' = '.join((k, repr(v))))
+        start_response('200 OK', [('Content-Type', 'text/plain')])
+        yield '\n'.join(chunks)
+
+    host(app=validator(demo_app), bind_to=('0.0.0.0', 8888))
