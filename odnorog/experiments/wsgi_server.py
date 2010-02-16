@@ -7,7 +7,9 @@ import signal
 import socket
 import sys
 import wsgiref.handlers
+import errno
 from urllib import unquote
+from select import select
 
 from process import fork, trap, wait_all
 from rfc2616 import parse_request_line, parse_headers
@@ -78,6 +80,7 @@ acceptor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 acceptor.bind(('0.0.0.0', 8888))
 acceptor.listen(1024)
 process_name = "Parent"
+master_pid = os.getpid()
 
 @atexit.register
 def on_exit():
@@ -89,6 +92,8 @@ for i in range(3):
     def child():
         from wsgiref.validate import validator
 
+        parent_pid = master_pid
+
         global process_name
         process_name = "Child"
 
@@ -97,14 +102,36 @@ for i in range(3):
             sys.exit()
 
         server_name, server_port = get_server_address(acceptor)
+        acceptor.settimeout(0.0)
+        rlist = [acceptor]
 
         while True:
-            sock, addr = acceptor.accept()
-            with closing(sock):
-                with closing(sock.makefile('wb', 16384)) as sock_output:
-                    with closing(sock.makefile('rb', 16384)) as sock_input:
-                        handler = WsgiHandler.parse_request(sock_input, sock_output, sys.stderr, server_name, server_port)
-                        handler.run(validator(demo_app))
+            for ready_sock in rlist:
+                try:
+                    sock, _ = ready_sock.accept()
+                except IOError as ex:
+                    if ex.errno not in (errno.EAGAIN, errno.ECONNABORTED): raise
+                else:
+                    # TODO: handle errors!
+                    sock.settimeout(None)
+                    with closing(sock):
+                        with closing(sock.makefile('wb', 16384)) as sock_output:
+                            with closing(sock.makefile('rb', 16384)) as sock_input:
+                                handler = WsgiHandler.parse_request(sock_input, sock_output, sys.stderr, server_name, server_port)
+                                handler.run(validator(demo_app))
+
+            # Quit if we see that our parent is gone.
+            if os.getppid() != parent_pid: return
+
+            try:
+                rlist, wlist, xlist = select([acceptor], [], [], 5.0)
+            except IOError as ex:
+                if ex.errno == errno.EINTR:
+                    rlist = [acceptor]
+                elif ex.errno == errno.EBADF:
+                    return
+                else:
+                    raise
 
     print "Forked child: {0}".format(child.pid)
 
