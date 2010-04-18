@@ -12,9 +12,9 @@ __all__ = ['Master']
 class Master(object):
     SIGMAP = dict((getattr(signal, 'SIG{0}'.format(signame)), signame)
                   for signame in 'HUP INT TERM QUIT USR1 USR2 WINCH TTIN TTOU'.split())
-    for sigcode, signame in SIGMAP.items():
-        exec '{signame}={sigcode}'.format(**locals())
-    del sigcode, signame
+    for signum, signame in SIGMAP.items():
+        exec '{signame}={signum}'.format(**locals())
+    del signum, signame
 
     def __init__(self, stdin):
         self.signal_queue = collections.deque(maxlen=5)
