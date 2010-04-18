@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
-from distutils.core import setup
+from setuptools import setup, find_packages
 
 setup(
     name='Odnorog',
     version='0.1',
     author='Pavel Repin',
-    packages=['odnorog', 'odnorog.experiments'],
+    packages=find_packages(),
 )
