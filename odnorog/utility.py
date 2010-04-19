@@ -1,8 +1,10 @@
 import fcntl
 import os
 import sys
+import logging
+import contextlib
 
-__all__ = ['make_nonblocking', 'close_on_exec', 'fork']
+__all__ = ['make_nonblocking', 'close_on_exec', 'logged', 'no_exceptions']
 
 def make_nonblocking(fd):
     fd_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
@@ -12,15 +14,15 @@ def make_nonblocking(fd):
 def close_on_exec(fd):
     fcntl.fcntl(fd, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
 
-def fork(f):
-    maybe_pid = os.fork()
-    if maybe_pid == 0:
-        # We're in the child process, call 'f' and bail.
-        try:
-            f()
-        finally:
-            sys.exit()
-    else:
-        # We're in the parent process, remember the child PID.
-        setattr(f, 'pid', maybe_pid)
-        return f
+def logged(cls):
+    if not hasattr(cls, 'log'):
+        result = logging.getLogger('{cls.__module__}.{cls.__name__}'.format(**locals()))
+        setattr(cls, 'log', result)
+    return cls
+
+@contextlib.contextmanager
+def no_exceptions():
+    try:
+        yield
+    except Exception:
+        pass
