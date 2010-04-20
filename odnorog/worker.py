@@ -65,7 +65,7 @@ class Worker(object):
         #trap(:USR1) { nr = -65536; SELF_PIPE.first.close rescue nil }
         signal.signal(signal.SIGQUIT, graceful_shutdown)
         map(lambda signum: signal.signal(signum, instant_shutdown), [signal.SIGTERM, signal.SIGINT])
-        self.log.info("Worker %s ready", self.nr)
+        self.log.info("%s ready.", self)
         m = 0
 
         while alive:
@@ -97,8 +97,8 @@ class Worker(object):
 
                 current_ppid = os.getppid()
                 if self.parent_pid != current_ppid:
-                    self.log.debug("Parent death: current PPID, %s, is not the same as original PPID, %s. Exiting now.",
-                        current_ppid, self.parent_pid)
+                    self.log.debug("Parent death: current PPID, %s, is not the same as original PPID, %s. %s exiting now.",
+                        current_ppid, self.parent_pid, self)
                     return
 
                 m = self.tickle_tmp(m)
@@ -121,9 +121,9 @@ class Worker(object):
                     ready = result[0]
             except Exception:
                 if alive:
-                    self.log.exception("Unhandled worker loop exception.")
+                    self.log.exception("Unhandled %s loop exception.", self)
 
-        self.log.info("Worker %s complete.", self.nr)
+        self.log.info("%s complete.", self)
 
     def dispose(self):
         with no_exceptions():

@@ -97,7 +97,7 @@ class Master(object):
                 if True:
                     worker = self.workers.pop(wpid, nil_worker)
                     worker.dispose()
-                    self.log.info("Reaped %r %s", status, worker)
+                    self.log.info("Reaped status %r from %s.", status, worker)
         except OSError as ex:
             if ex.errno != errno.ECHILD:
                 raise
@@ -201,8 +201,8 @@ class Master(object):
             diff = datetime.utcnow() - datetime.utcfromtimestamp(stat.st_ctime)
             if diff <= self.timeout:
                 continue
-            self.log.error("Killing worker %s with PID %s due to timeout (%s > %s).",
-                worker.nr, wpid, diff, self.timeout)
+            self.log.error("Killing %s with PID %s due to timeout (%s > %s).",
+                worker, wpid, diff, self.timeout)
             self.kill_worker(self.KILL, wpid) # take no prisoners for timeout violations
 
     def spawn_missing_workers(self):
