@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # odnorog imports
 from odnorog.utility import make_nonblocking, close_on_exec, logged, no_exceptions
 from odnorog import const
-from odnorog.worker import NilWorker, Worker
+from odnorog.worker import nil_worker, Worker
 
 __all__ = ['Master']
 
@@ -83,6 +83,28 @@ class Master(object):
                 continue
         self.log.debug("Waking myself up.")
 
+    def reap_all_workers(self):
+        """
+        Reaps all unreaped workers.
+        """
+        try:
+            while True:
+                wpid, status = os.waitpid(-1, os.WNOHANG)
+                if not wpid: break
+                # if self.reexec_pid == wpid:
+                #   logger.error "reaped #{status.inspect} exec()-ed"
+                #   self.reexec_pid = 0
+                #   self.pid = pid.chomp('.oldbin') if pid
+                #   proc_name 'master'
+                # else:
+                if True:
+                    worker = self.workers.pop(wpid, nil_worker)
+                    worker.dispose()
+                    self.log.info("Reaped %r %s", status, worker)
+        except OSError as ex:
+            if ex.errno != errno.ECHILD:
+                raise
+
     def init_self_pipe(self):
         def forced_close(fd):
             with no_exceptions():
@@ -121,6 +143,7 @@ class Master(object):
         self.log.info("Master process ready.")
 
         while True:
+            self.reap_all_workers()
             if not self.signal_queue:
                 # avoid murdering workers after our master process (or the
                 # machine) comes out of suspend/hibernation
@@ -157,7 +180,7 @@ class Master(object):
         while self.workers and datetime.utcnow() <= limit:
             self.kill_each_worker(self.QUIT if graceful else self.TERM)
             time.sleep(0.1)
-            #reap_all_workers
+            self.reap_all_workers()
         self.kill_each_worker(self.KILL)
 
     def maintain_worker_count(self):
@@ -214,7 +237,7 @@ class Master(object):
         except OSError as ex:
             if ex.errno != errno.ESRCH:
                 raise
-            self.workers.pop(wpid, NilWorker).dispose()
+            self.workers.pop(wpid, nil_worker).dispose()
 
     def kill_each_worker(self, signum):
         """

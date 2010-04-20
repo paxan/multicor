@@ -6,10 +6,13 @@ import errno
 
 from odnorog.utility import no_exceptions, logged
 
-__all__ = ['NilWorker', 'Worker']
+__all__ = ['nil_worker', 'Worker']
 
 class NilWorker(object):
+    def __str__(self): return 'Worker[unknown]'
     def dispose(self): pass
+
+nil_worker = NilWorker()
 
 @logged
 class Worker(object):
@@ -20,6 +23,9 @@ class Worker(object):
         os.close(self.tmp)
         self.tmp = os.open(self.tmpname, os.O_RDWR | os.O_SYNC)
         os.unlink(self.tmpname)
+
+    def __str__(self):
+        return 'Worker[{0}]'.format(self.nr)
 
     def __eq__(self, other_nr):
         """
