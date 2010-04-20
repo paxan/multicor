@@ -43,7 +43,6 @@ class Master(object):
             self.log.error("Ignoring SIG%s, queue=%r", self.SIGMAP[signum], self.signal_queue)
 
     def trap_sigchild(self, signum, _):
-        self.log.debug("Got SIGCHLD")
         self.wake()
 
     def sleep(self, seconds):
@@ -69,7 +68,6 @@ class Master(object):
             except OSError as ex:
                 if ex.errno not in [errno.EAGAIN, errno.EINTR]:
                     raise
-            self.log.debug("Awoke from sleep.")
 
     def wake(self):
         while True:
@@ -81,7 +79,6 @@ class Master(object):
                     raise
                 # pipe is full, master should wake up anyways
                 continue
-        self.log.debug("Waking myself up.")
 
     def reap_all_workers(self):
         """

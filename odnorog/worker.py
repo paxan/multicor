@@ -36,7 +36,6 @@ class Worker(object):
     def tickle_tmp(self, m):
         m = 1 if not m else 0
         os.fchmod(self.tmp, m)
-        self.log.debug("Worker tmp object chmod-ed to %r", m)
         return m
 
     def loop(self):
