@@ -46,12 +46,12 @@ class Master(object):
         self.log.debug("Got SIGCHLD")
         self.wake()
 
-    def sleep(self):
+    def sleep(self, seconds):
         reading_set = [self.stdin]
         if self.pipe:
             reading_set.append(self.pipe[0])
         try:
-            result = ioc.select(reading_set, [], [], 1.0)
+            result = ioc.select(reading_set, [], [], seconds)
         except ioc.error as ex:
             if ex[0] not in [errno.EAGAIN, errno.EINTR]:
                 raise
@@ -127,10 +127,13 @@ class Master(object):
                 now = datetime.utcnow()
                 if last_check + self.timeout >= now:
                     self.murder_lazy_workers()
+                else:
+                    # wait for workers to wakeup on suspend
+                    self.sleep((self.timeout / 2).seconds + 1)
                 last_check = now
                 if respawn:
                     self.maintain_worker_count()
-                self.sleep()
+                self.sleep(1)
                 continue
 
             signum = self.signal_queue.popleft()
@@ -258,7 +261,7 @@ if __name__ == '__main__':
                 w.write('555')
 
             master = Master(r)
-            master.sleep()
+            master.sleep(5)
             self.assertEquals(Master.INT, master.signal_queue.popleft())
 
         def test_wake_on_child_status_change(self):
