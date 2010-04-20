@@ -63,8 +63,8 @@ class Master(object):
                     # Consume all ready-to-read bytes from stdin
                     # and raise EAGAIN if stdin is not yet closed.
                     while os.read(self.stdin, const.CHUNK_SIZE): pass
-                    self.log.debug("stdin EOF is reached, acting as if SIGINT was received.")
-                    self.signal_queue.append(self.INT)
+                    self.log.info("STDIN closed, exiting now.")
+                    self.signal_queue.appendleft(self.INT)
             except OSError as ex:
                 if ex.errno not in [errno.EAGAIN, errno.EINTR]:
                     raise
