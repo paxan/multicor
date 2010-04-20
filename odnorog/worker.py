@@ -27,24 +27,33 @@ class Worker(object):
         """
         return self.nr == other_nr
 
+    def tickle_tmp(self, m):
+        m = 1 if not m else 0
+        os.fchmod(self.tmp, m)
+        self.log.debug("Worker tmp object chmod-ed to %r", m)
+        return m
+
     def loop(self):
         """
         Runs inside each forked worker, this sits around and waits
         for connections and doesn't die until the parent dies (or is
         given a INT, QUIT, or TERM signal)
         """
-        alive = self.tmp # tmp is our lifeline to the master process
+        alive = {True:True}
 
         def instant_shutdown(*_):
             os._exit(0)
 
         def graceful_shutdown(*_):
-            alive = nil
+            alive.clear()
+            # TODO: perhaps it's better to close the self pipe since
+            #       it should have the same effect as closing listeners,
+            #       feels more general.
             for s in self.listeners:
                 with no_exceptions():
                     s.close()
 
-        #nr = 0 # this becomes negative if we need to reopen logs
+        nr = 0 # this becomes negative if we need to reopen logs
         ready = self.listeners
 
         ## closing anything we ioc.select on will raise EBADF
@@ -54,24 +63,22 @@ class Worker(object):
         self.log.info("Worker %s ready", self.nr)
         m = 0
 
-        while True:
+        while alive:
             try:
                 #nr < 0 and reopen_worker_logs(worker.nr)
                 nr = 0
 
-                # We're a goner in timeout seconds anyways if chmod of alive
-                # breaks, so don't trap the exception. No-op
-                # changes with fchmod doesn't update ctime on all filesystems; so
-                # we change our counter each and every time (after process_client
-                # and before ioc.select).
-                m = 1 if not m else 0
-                os.fchmod(alive, m)
+                # We're a goner in timeout seconds anyways if tickle_tmp throws,
+                # so don't trap the exception. No-op changes with tickle_tmp don't
+                # update ctime on all filesystems; so we change our counter each
+                # and every time (after process_client and before ioc.select).
+                m = self.tickle_tmp(m)
 
                 #ready.each do |sock|
                 #  begin
                 #    process_client(sock.accept_nonblock)
                 #    nr += 1
-                #    alive.chmod(m = 0 == m ? 1 : 0)
+                #    m = self.tickle_tmp(m)
                 #  rescue Errno::EAGAIN, Errno::ECONNABORTED
                 #  end
                 #  break if nr < 0
@@ -85,32 +92,33 @@ class Worker(object):
 
                 current_ppid = os.getppid()
                 if self.parent_pid != current_ppid:
-                    self.log.debug("Parent death: current PPID, %s, is not the same original PPID, %s. Exiting now.",
+                    self.log.debug("Parent death: current PPID, %s, is not the same as original PPID, %s. Exiting now.",
                         current_ppid, self.parent_pid)
                     return
-                m = 1 if not m else 0
-                os.fchmod(alive, m)
 
-                while True:
-                    try:
-                        # timeout used so we can detect parent death:
-                        result = ioc.select(self.listeners, [], self.pipe, self.timeout.seconds)
-                    except ioc.error as ex:
-                        e = ex[0]
-                        if e == errno.EINTR:
-                            ready = self.listeners
-                        elif e == errno.EBADF:
-                            if nr >= 0: return
-                        else:
-                            raise
+                m = self.tickle_tmp(m)
+
+                try:
+                    # timeout used so we can detect parent death:
+                    result = ioc.select(self.listeners, [], self.pipe, self.timeout.seconds)
+                except ioc.error as ex:
+                    e = ex[0]
+                    if e == errno.EINTR:
+                        ready = self.listeners
+                    elif e == errno.EBADF:
+                        if nr >= 0:
+                            # Terminate the loop due to closure of selected descriptors.
+                            # If we're reopening logs, nr will be < 0.
+                            alive.clear()
                     else:
-                        ready = result[0]
-                        if ready: break
+                        raise
+                else:
+                    ready = result[0]
             except Exception:
                 if alive:
                     self.log.exception("Unhandled worker loop exception.")
-            if alive is None:
-                break
+
+        self.log.info("Worker %s complete.", self.nr)
 
     def dispose(self):
         with no_exceptions():
