@@ -207,7 +207,7 @@ class Master(object):
         is no longer running.
         """
         try:
-            os.kill(signum, wpid)
+            os.kill(wpid, signum)
         except OSError as ex:
             if ex.errno != errno.ESRCH:
                 raise
