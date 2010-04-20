@@ -94,8 +94,7 @@ class Worker(object):
 
                 current_ppid = os.getppid()
                 if self.parent_pid != current_ppid:
-                    self.log.debug("Parent death: current PPID, %s, is not the same as original PPID, %s. %s exiting now.",
-                        current_ppid, self.parent_pid, self)
+                    self.log.info("Parent %s died. %s exiting now.", self.parent_pid, self)
                     return
 
                 m = self.tickle_tmp(m)
