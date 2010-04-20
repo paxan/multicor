@@ -51,9 +51,6 @@ class Worker(object):
 
         def graceful_shutdown(*_):
             alive.clear()
-            # TODO: perhaps it's better to close the self pipe since
-            #       it should have the same effect as closing listeners,
-            #       feels more general.
             for s in self.listeners:
                 with no_exceptions():
                     s.close()
