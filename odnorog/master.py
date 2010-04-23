@@ -46,6 +46,13 @@ class Master(object):
         self.wake()
 
     def sleep(self, seconds):
+        """
+        Wait for a signal hander to wake us up and then consume the pipe
+        Wake up regularly (specified by seconds parameter) to run
+        murder_lazy_workers.
+        Also consume STDIN, and, when STDIN is closed, begin to exit
+        right away.
+        """
         reading_set = [self.stdin]
         if self.pipe:
             reading_set.append(self.pipe[0])
