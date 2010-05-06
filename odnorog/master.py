@@ -59,7 +59,7 @@ class Master(object):
         try:
             result = ioc.select(reading_set, [], [], seconds)
         except ioc.error as ex:
-            if ex[0] not in [errno.EAGAIN, errno.EINTR]:
+            if ex[0] not in (errno.EAGAIN, errno.EINTR):
                 raise
         else:
             try:
@@ -73,7 +73,7 @@ class Master(object):
                     self.log.info("STDIN closed, exiting now.")
                     self.signal_queue.appendleft(self.INT)
             except OSError as ex:
-                if ex.errno not in [errno.EAGAIN, errno.EINTR]:
+                if ex.errno not in (errno.EAGAIN, errno.EINTR):
                     raise
 
     def wake(self):
@@ -82,7 +82,7 @@ class Master(object):
                 os.write(self.pipe[1], '.') # Wake up master process from select
                 break
             except IOError as ex:
-                if ex.errno not in [errno.EAGAIN, errno.EINTR]:
+                if ex.errno not in (errno.EAGAIN, errno.EINTR):
                     raise
                 # pipe is full, master should wake up anyways
                 continue
