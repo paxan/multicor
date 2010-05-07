@@ -55,12 +55,13 @@ class Master(object):
     del signum, signame
     KILL = signal.SIGKILL
 
-    def __init__(self, stdin, **conf):
+    def __init__(self, conf):
         self.timeout = conf.get('timeout', timedelta(seconds=60))
         self.worker_processes = conf.get('worker_processes', 8)
         self.signal_queue = collections.deque()
-        self.stdin = stdin
-        make_nonblocking(stdin)
+        self.exit_on_stdin_closure = conf.get('exit_on_stdin_closure', True)
+        if self.exit_on_stdin_closure:
+            make_nonblocking(sys.stdin)
         self.pipe = []
         self.workers = {}
         self.listeners = list(conf.get('listeners', []))
@@ -84,9 +85,11 @@ class Master(object):
         Also consume STDIN, and, when STDIN is closed, begin to exit
         right away.
         """
-        reading_set = [self.stdin]
-        if self.pipe:
-            reading_set.append(self.pipe[0])
+        reading_set = [self.pipe[0]]
+        stdin = sys.stdin.fileno()
+        if self.exit_on_stdin_closure:
+            reading_set.append(stdin)
+
         try:
             result = ioc.select(reading_set, [], [], seconds)
         except ioc.error as ex:
@@ -97,10 +100,10 @@ class Master(object):
                 if self.pipe and self.pipe[0] in result[0]:
                     while True:
                         os.read(self.pipe[0], CHUNK_SIZE)
-                if self.stdin in result[0]:
+                if stdin in result[0]:
                     # Consume all ready-to-read bytes from stdin
                     # and raise EAGAIN if stdin is not yet closed.
-                    while os.read(self.stdin, CHUNK_SIZE): pass
+                    while os.read(stdin, CHUNK_SIZE): pass
                     self.log.info("STDIN closed, exiting now.")
                     self.signal_queue.appendleft(self.INT)
             except OSError as ex:
@@ -150,9 +153,9 @@ class Master(object):
         map(make_nonblocking, self.pipe)
 
     @classmethod
-    def start(cls, conf):
+    def start(cls, **conf):
         cls.log.debug("Master PID: %s", os.getpid())
-        master = cls(sys.stdin.fileno(), **conf)
+        master = cls(conf)
 
         # this pipe is used to wake us up from select(2) in #join when signals
         # are trapped.  See trap_deferred.
@@ -450,11 +453,12 @@ if __name__ == '__main__':
     try:
         listener.bind(('0.0.0.0', 8888))
         listener.listen(1024)
-        master = Master.start(conf=dict(
+        master = Master.start(
             app=echoer,
             timeout=timedelta(seconds=15),
             worker_processes=8,
-            listeners=[listener]))
+            listeners=[listener],
+        )
         master.join()
     finally:
         listener.close()
