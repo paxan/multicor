@@ -2,6 +2,7 @@ import tempfile
 import os
 import signal
 import select as ioc # I/O Completion
+import socket
 import errno
 
 from odnorog.utility import no_exceptions, logged
@@ -17,6 +18,7 @@ nil_worker = NilWorker()
 @logged
 class Worker(object):
     def __init__(self, nr, parent_pid):
+        self.app = lambda sock, addr: None
         self.nr = nr
         self.parent_pid = parent_pid
         self.tmp, self.tmpname = tempfile.mkstemp()
@@ -57,6 +59,10 @@ class Worker(object):
                 with no_exceptions():
                     s.close()
 
+        # Ensure listener sockets are in non-blocking mode
+        # so that accept() calls return immediatly.
+        map(lambda s: s.setblocking(0), self.listeners)
+
         ready = self.listeners
 
         ## closing anything we ioc.select on will raise EBADF
@@ -76,21 +82,20 @@ class Worker(object):
                 # and every time (after process_client and before ioc.select).
                 State.fchmod_tmp()
 
-                #ready.each do |sock|
-                #  begin
-                #    process_client(sock.accept_nonblock)
-                #    State.nr += 1
-                #    State.fchmod_tmp()
-                #  rescue Errno::EAGAIN, Errno::ECONNABORTED
-                #  end
-                #  break if State.nr < 0
-                #end
+                for sock in ready:
+                    try:
+                        self.process_client(*sock.accept())
+                        State.nr += 1
+                        State.fchmod_tmp()
+                    except socket.error as ex:
+                        if ex[0] not in (errno.EAGAIN, errno.ECONNABORTED): raise
+                    if State.nr < 0: break
 
-                ## make the following bet: if we accepted clients this round,
-                ## we're probably reasonably busy, so avoid calling select()
-                ## and do a speculative accept_nonblock on ready listeners
-                ## before we sleep again in select().
-                #redo unless State.nr == 0 # (nr < 0) => reopen logs
+                # Make the following bet: if we accepted clients this round,
+                # we're probably reasonably busy, so avoid calling select()
+                # and do a speculative accept_nonblock on ready listeners
+                # before we sleep again in select().
+                if State.nr > 0: continue
 
                 current_ppid = os.getppid()
                 if self.parent_pid != current_ppid:
@@ -120,6 +125,16 @@ class Worker(object):
                     self.log.exception("Unhandled %s loop exception.", self)
 
         self.log.info("%s complete.", self)
+
+    def process_client(self, client, address):
+        self.log.debug("%s started processing %s.", self, address)
+        try:
+            client.setblocking(1)
+            self.app(client, address)
+        finally:
+            with no_exceptions():
+                self.log.debug("%s finished processing %s.", self, address)
+                client.close()
 
     def dispose(self):
         with no_exceptions():

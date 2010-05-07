@@ -25,15 +25,16 @@ class Master(object):
     del signum, signame
     KILL = signal.SIGKILL
 
-    def __init__(self, stdin):
-        self.timeout = timedelta(seconds=60) # TODO: configure me!
-        self.worker_processes = 8 # TODO: configure me!
+    def __init__(self, stdin, **conf):
+        self.timeout = conf.get('timeout', timedelta(seconds=60))
+        self.worker_processes = conf.get('worker_processes', 8)
         self.signal_queue = collections.deque()
         self.stdin = stdin
         make_nonblocking(stdin)
         self.pipe = []
         self.workers = {}
-        self.listeners = [] # TODO: this gets inited with sockets somehow?!
+        self.listeners = list(conf.get('listeners', []))
+        self.app = conf.get('app')
 
     def trap_deferred(self, signum, _):
         if len(self.signal_queue) < 5:
@@ -119,8 +120,8 @@ class Master(object):
         map(make_nonblocking, self.pipe)
 
     @classmethod
-    def start(cls):
-        master = cls(sys.stdin.fileno())
+    def start(cls, conf):
+        master = cls(sys.stdin.fileno(), **conf)
 
         # this pipe is used to wake us up from select(2) in #join when signals
         # are trapped.  See trap_deferred.
@@ -275,10 +276,14 @@ class Master(object):
         #build_app! unless preload_app
         worker.listeners = self.listeners
         worker.pipe = self.pipe
+        if self.app is not None:
+            worker.app = self.app
 
 if __name__ == '__main__':
     import unittest
     import sys
+    import socket
+    from contextlib import closing
 
     class MasterTests(unittest.TestCase):
         def test_wake_on_stdin_eof_and_enqueue_INT(self):
@@ -307,5 +312,22 @@ if __name__ == '__main__':
     logging.getLogger().setLevel(logging.DEBUG)
     logging.debug("Master PID: %s", os.getpid())
 
-    master = Master.start()
-    master.join()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    def echoer(client, address):
+        with closing(client.makefile('rb')) as client_r:
+            data = client_r.readline()
+            with closing(client.makefile('wb')) as client_w:
+                client_w.write('[haha] {0}'.format(data))
+
+    try:
+        listener.bind(('0.0.0.0', 8888))
+        listener.listen(1024)
+        master = Master.start(conf=dict(
+            app=echoer,
+            timeout=timedelta(seconds=15),
+            worker_processes=8,
+            listeners=[listener]))
+        master.join()
+    finally:
+        listener.close()
