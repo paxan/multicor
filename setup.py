@@ -6,5 +6,5 @@ setup(
     name='Odnorog',
     version='0.1',
     author='Pavel Repin',
-    packages=['odnorog', 'odnorog.experiments'],
+    py_modules=['odnorog'],
 )

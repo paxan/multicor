@@ -1,19 +1,49 @@
-# standard imports
+import collections
+import contextlib
+import errno
+import fcntl
 import logging
 import os
 import select as ioc # I/O Completion
-import collections
 import signal
-import errno
+import socket
+import sys
+import tempfile
 import time
+
 from datetime import datetime, timedelta
 
-# odnorog imports
-from odnorog.utility import make_nonblocking, close_on_exec, logged, no_exceptions
-from odnorog import const
-from odnorog.worker import nil_worker, Worker
-
 __all__ = ['Master']
+
+# The basic max request size we'll try to read.
+CHUNK_SIZE=(16 * 1024)
+
+def make_nonblocking(fd):
+    fd_flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, fd_flags | os.O_NONBLOCK)
+    return fd_flags # Give caller a chance to restore original flags.
+
+def close_on_exec(fd):
+    fcntl.fcntl(fd, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
+
+def logged(cls):
+    if not hasattr(cls, 'log'):
+        result = logging.getLogger('{cls.__module__}.{cls.__name__}'.format(**locals()))
+        setattr(cls, 'log', result)
+    return cls
+
+@contextlib.contextmanager
+def no_exceptions():
+    try:
+        yield
+    except Exception:
+        pass
+
+class NilWorker(object):
+    def __str__(self): return 'Worker[unknown]'
+    def dispose(self): pass
+
+nil_worker = NilWorker()
 
 @logged
 class Master(object):
@@ -66,11 +96,11 @@ class Master(object):
             try:
                 if self.pipe and self.pipe[0] in result[0]:
                     while True:
-                        os.read(self.pipe[0], const.CHUNK_SIZE)
+                        os.read(self.pipe[0], CHUNK_SIZE)
                 if self.stdin in result[0]:
                     # Consume all ready-to-read bytes from stdin
                     # and raise EAGAIN if stdin is not yet closed.
-                    while os.read(self.stdin, const.CHUNK_SIZE): pass
+                    while os.read(self.stdin, CHUNK_SIZE): pass
                     self.log.info("STDIN closed, exiting now.")
                     self.signal_queue.appendleft(self.INT)
             except OSError as ex:
@@ -279,46 +309,143 @@ class Master(object):
         if self.app is not None:
             worker.app = self.app
 
+@logged
+class Worker(object):
+    def __init__(self, nr, parent_pid):
+        self.app = lambda sock, addr: None
+        self.nr = nr
+        self.parent_pid = parent_pid
+        self.tmp, self.tmpname = tempfile.mkstemp()
+        os.close(self.tmp)
+        self.tmp = os.open(self.tmpname, os.O_RDWR | os.O_SYNC)
+        os.unlink(self.tmpname)
+
+    def __str__(self):
+        return 'Worker[{0}]'.format(self.nr)
+
+    def __eq__(self, other_nr):
+        """
+        Worker objects may be compared to just plain numbers.
+        """
+        return self.nr == other_nr
+
+    def loop(self):
+        """
+        Runs inside each forked worker, this sits around and waits
+        for connections and doesn't die until the parent dies (or is
+        given a INT, QUIT, or TERM signal)
+        """
+        class State(object):
+            alive = True
+            nr = 0 # this becomes negative if we need to reopen logs
+            m = 0
+            @classmethod
+            def fchmod_tmp(cls):
+                cls.m = 1 if not cls.m else 0
+                os.fchmod(self.tmp, cls.m)
+
+        def instant_shutdown(*_):
+            os._exit(0)
+
+        def graceful_shutdown(*_):
+            State.alive = False
+            for s in self.listeners:
+                with no_exceptions():
+                    s.close()
+
+        # Ensure listener sockets are in non-blocking mode
+        # so that accept() calls return immediatly.
+        map(lambda s: s.setblocking(0), self.listeners)
+
+        ready = self.listeners
+
+        ## closing anything we ioc.select on will raise EBADF
+        #trap(:USR1) { State.nr = -65536; SELF_PIPE.first.close rescue nil }
+        signal.signal(signal.SIGQUIT, graceful_shutdown)
+        map(lambda signum: signal.signal(signum, instant_shutdown), [signal.SIGTERM, signal.SIGINT])
+        self.log.info("%s ready.", self)
+
+        while State.alive:
+            try:
+                #State.nr < 0 and reopen_worker_logs(worker.nr)
+                State.nr = 0
+
+                # We're a goner in timeout seconds anyways if fchmod_tmp() throws,
+                # so don't trap the exception. No-op changes with fchmod_tmp() don't
+                # update ctime on all filesystems; so we change our counter each
+                # and every time (after process_client and before ioc.select).
+                State.fchmod_tmp()
+
+                for sock in ready:
+                    try:
+                        self.process_client(*sock.accept())
+                        State.nr += 1
+                        State.fchmod_tmp()
+                    except socket.error as ex:
+                        if ex[0] not in (errno.EAGAIN, errno.ECONNABORTED): raise
+                    if State.nr < 0: break
+
+                # Make the following bet: if we accepted clients this round,
+                # we're probably reasonably busy, so avoid calling select()
+                # and do a speculative accept_nonblock on ready listeners
+                # before we sleep again in select().
+                if State.nr > 0: continue
+
+                current_ppid = os.getppid()
+                if self.parent_pid != current_ppid:
+                    self.log.info("Parent %s died. %s exiting now.", self.parent_pid, self)
+                    return
+
+                State.fchmod_tmp()
+
+                try:
+                    # timeout used so we can detect parent death:
+                    result = ioc.select(self.listeners, [], self.pipe, self.timeout.seconds)
+                except ioc.error as ex:
+                    e = ex[0]
+                    if e == errno.EINTR:
+                        ready = self.listeners
+                    elif e == errno.EBADF:
+                        if State.nr >= 0:
+                            # Terminate the loop due to closure of selected descriptors.
+                            # If we're reopening logs, nr will be < 0.
+                            State.alive = False
+                    else:
+                        raise
+                else:
+                    ready = result[0]
+            except Exception:
+                if State.alive:
+                    self.log.exception("Unhandled %s loop exception.", self)
+
+        self.log.info("%s complete.", self)
+
+    def process_client(self, client, address):
+        self.log.debug("%s started processing %s.", self, address)
+        try:
+            client.setblocking(1)
+            self.app(client, address)
+        finally:
+            with no_exceptions():
+                self.log.debug("%s finished processing %s.", self, address)
+                client.close()
+
+    def dispose(self):
+        with no_exceptions():
+            os.close(self.tmp)
+
 if __name__ == '__main__':
-    import unittest
-    import sys
-    import socket
-    from contextlib import closing
 
-    class MasterTests(unittest.TestCase):
-        def test_wake_on_stdin_eof_and_enqueue_INT(self):
-            r, w = os.pipe()
-
-            with os.fdopen(w, 'wb') as w:
-                w.write('555')
-
-            master = Master(r)
-            master.sleep(5)
-            self.assertEquals(Master.INT, master.signal_queue.popleft())
-
-        def test_wake_on_child_status_change(self):
-            master = Master.start()
-            fork_result = os.fork()
-            if fork_result == 0:
-                # child
-                import time
-                time.sleep(5)
-                os._exit(0)
-            else:
-                # parent
-                master.sleep(None)
-                #os.waitpid(fork_result, 0)
+    def echoer(client, address):
+        with contextlib.closing(client.makefile('rb')) as reader:
+            data = reader.readline()
+            with contextlib.closing(client.makefile('wb')) as writer:
+                writer.write('[haha] {0}'.format(data))
 
     logging.getLogger().setLevel(logging.DEBUG)
     logging.debug("Master PID: %s", os.getpid())
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    def echoer(client, address):
-        with closing(client.makefile('rb')) as client_r:
-            data = client_r.readline()
-            with closing(client.makefile('wb')) as client_w:
-                client_w.write('[haha] {0}'.format(data))
 
     try:
         listener.bind(('0.0.0.0', 8888))
