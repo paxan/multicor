@@ -151,6 +151,7 @@ class Master(object):
 
     @classmethod
     def start(cls, conf):
+        cls.log.debug("Master PID: %s", os.getpid())
         master = cls(sys.stdin.fileno(), **conf)
 
         # this pipe is used to wake us up from select(2) in #join when signals
@@ -442,8 +443,7 @@ if __name__ == '__main__':
             with contextlib.closing(client.makefile('wb')) as writer:
                 writer.write('[haha] {0}'.format(data))
 
-    logging.getLogger().setLevel(logging.DEBUG)
-    logging.debug("Master PID: %s", os.getpid())
+    logging.basicConfig(level=logging.DEBUG, format='%(levelname)-5s [%(name)s] %(message)s')
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
