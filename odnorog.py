@@ -60,8 +60,9 @@ class Master(object):
         self.worker_processes = conf.get('worker_processes', 8)
         self.signal_queue = collections.deque()
         self.exit_on_stdin_closure = conf.get('exit_on_stdin_closure', True)
+        self.stdin = conf.get('stdin', sys.stdin.fileno())
         if self.exit_on_stdin_closure:
-            make_nonblocking(sys.stdin)
+            make_nonblocking(self.stdin)
         self.pipe = []
         self.workers = {}
         self.listeners = list(conf.get('listeners', []))
@@ -86,9 +87,8 @@ class Master(object):
         right away.
         """
         reading_set = [self.pipe[0]]
-        stdin = sys.stdin.fileno()
         if self.exit_on_stdin_closure:
-            reading_set.append(stdin)
+            reading_set.append(self.stdin)
 
         try:
             result = ioc.select(reading_set, [], [], seconds)
@@ -100,10 +100,10 @@ class Master(object):
                 if self.pipe and self.pipe[0] in result[0]:
                     while True:
                         os.read(self.pipe[0], CHUNK_SIZE)
-                if stdin in result[0]:
+                if self.stdin in result[0]:
                     # Consume all ready-to-read bytes from stdin
                     # and raise EAGAIN if stdin is not yet closed.
-                    while os.read(stdin, CHUNK_SIZE): pass
+                    while os.read(self.stdin, CHUNK_SIZE): pass
                     self.log.info("STDIN closed, exiting now.")
                     self.signal_queue.appendleft(self.INT)
             except OSError as ex:
