@@ -28,7 +28,7 @@ def close_on_exec(fd):
 
 def logged(cls):
     if not hasattr(cls, 'log'):
-        result = logging.getLogger('{cls.__module__}.{cls.__name__}'.format(**locals()))
+        result = logging.getLogger('{cls.__module__}.{cls.__name__}'.format(cls=cls))
         setattr(cls, 'log', result)
     return cls
 
