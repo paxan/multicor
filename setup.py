@@ -3,8 +3,8 @@
 from distutils.core import setup
 
 setup(
-    name='Odnorog',
+    name='multicor',
     version='0.1',
     author='Pavel Repin',
-    py_modules=['odnorog'],
+    py_modules=['multicor'],
 )

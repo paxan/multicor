@@ -17,7 +17,7 @@ from process import fork, trap, wait_all
 
 __version__ = '0.1'
 
-_server_version = "odnorog/" + __version__
+_server_version = "multicor/" + __version__
 _sys_version = "Python/" + sys.version.split()[0]
 _software_version = _server_version + ' ' + _sys_version
 
@@ -175,7 +175,7 @@ def host(app, bind_to):
             rlist = [acceptor]
 
             server = Server(app, {
-                'odnorog.process_name': process_info['name']
+                'multicor.process_name': process_info['name']
             })
 
             while True:
@@ -217,7 +217,7 @@ if __name__ == '__main__':
 
     def demo_app(environ, start_response):
         start_response('200 OK', [('Content-Type', 'text/plain')])
-        yield "Hello, I'm {0} {1}\n".format(environ['odnorog.process_name'], os.getpid())
+        yield "Hello, I'm {0} {1}\n".format(environ['multicor.process_name'], os.getpid())
         for k, v in sorted(environ.items()):
             yield ' = '.join((k, repr(v)))
             yield '\n'
